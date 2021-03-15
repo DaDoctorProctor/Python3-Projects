@@ -1,0 +1,183 @@
+
+
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Mar 14 14:48:49 2021
+
+@author: homer
+"""
+
+import cv2
+import numpy as np
+import matplotlib
+from matplotlib import pyplot as plt
+
+meds_avg = 0
+store_avg = np.zeros(100)
+a = 0
+
+#Crea un objeto de captura de video
+cap = cv2.VideoCapture(0)
+#Verifica si se pudo abrir.
+if (cap.isOpened() == False):
+    print('ERROR - Camara')
+
+#Obtenemos el tamano del frame caturado
+#El tamano del fram se convierte a entero.
+ancho_frame = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+altura_frame = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fps = int(cap.get(cv2.CAP_PROP_FPS))
+print(ancho_frame,altura_frame,fps)
+
+#lee la camara, frame por frame.
+while True:
+    ret,frame = cap.read()
+    #Hacer copia del frame.
+    imBGR = frame.copy()
+    #Convertir a escala de grises
+    im = cv2.cvtColor(imBGR,cv2.COLOR_BGR2GRAY)
+    #Imagen binaria
+    im = cv2.medianBlur(im,5)
+    _ , imbw = cv2.threshold(im,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(5,5))
+    #Hacemos una op4 de cierre
+    imbw = cv2.morphologyEx(imbw,cv2.MORPH_CLOSE,kernel)
+    
+    #Extraemos los contornos
+    conts, _ = cv2.findContours(imbw,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    #Recorremos los contornos para extraer el de mayor area.
+    rectmax = []
+    areamax = 0
+    indmax = 0
+    for i,c in enumerate(conts):
+        #Rectangulo de area minima
+        rect = cv2.minAreaRect(c)
+        if np.prod(rect[1]) > areamax:
+            areamax = np.prod(rect[1])
+            rectmax = rect
+            indmax = 1
+            
+    box = cv2.boxPoints(rectmax)
+    box = np.int32(box)
+    
+    
+    # En ese rectángulo calculamos la hipotenusa
+    # El valor más grande de la tupla (altura, ancho) es el que corresponde
+    # a la hipotenusa
+    hippix = np.max( rectmax[1] ) # Medida de la hipotenusa en pixeles
+    hipmm = 9.1#np.sqrt( 97**2 + 30**2 )
+    rel = hipmm / hippix
+    
+    # Recorremos una vez más los contornos para dibujar sobre ellos
+    for i,c in enumerate(conts):
+        # Todos, excepto el rectángulo más grande
+        #if i != indmax:
+            # Rectángulo de área mínima
+            rect = cv2.minAreaRect( c )
+            box = cv2.boxPoints(rect)
+            box = np.int32(box) # Redondeo de las coordenadas
+    
+    
+    # Dibujamos el rectángulo
+            #cv2.drawContours(imBGR, [box], 0, (0,0,255), 2)
+             # Ajustamos una recta a cada tornillo y calculamos la
+            # intersección de la misma con las paredes de la
+            # caja de área mínima
+            u,v,xr,yr = cv2.fitLine( c, cv2.DIST_L2, 0, 0.01, 0.01 )
+    # Escogemos el primer punto y medimos la distancia de este punto
+            # hacia los demás
+            matp = np.tile( box[0], (4,1) ) # Replicamos las coordenadas
+            # Calculamos la distancia euclidiana hacia todos los puntos
+            matd = np.sqrt( np.sum( (matp - box)**2, axis=1 ) )
+            # Obtiene el índice de la casilla hasta donde existe la distancia mínima
+            indmin = np.argmin(matd[1:]) + 1 # Desde la casilla 1 hasta el final
+            # Este índice corresponde al vértice de la caja más cercano al punto actual
+            # por lo que significa que entre los dos puntos forman uno de los lados
+            # pequeños del rectángulo
+            p1 = box[0] # Punto 1
+            p2 = box[indmin] # Punto 2
+    # Trazamos una línea entre estos dos puntos
+            #cv2.line( imBGR, (p1[0],p1[1]), (p2[0],p2[1]), (0,255,0), 2 )
+            # Índices de los 4 puntos (del punto 0 al 3)
+            indices = np.array([0,1,2,3])
+            # Los índices que restan forman el otro lado pequeño del rectángulo
+            indrest = np.bitwise_and( indices != 0, indices != indmin )
+            ind34 = indices[indrest]
+            p3 = box[ind34[0]] # Punto 3
+            p4 = box[ind34[1]] # Punto 4
+    
+    # Obtenemos la ecuación paramétrica para la recta entre los
+            # puntos p1 y p2
+            v1 = p2-p1 # Vector que va de p1 a p2
+            # Calculamos el valor de t y s de intersección con la recta
+            # de ajuste dada por OpenCV resolviendo el sistema de
+            # ecuaciones lineales
+            if abs(np.sum(v1)) > 2: # Para evitar que la matriz sea singular
+                A = np.array( [ [u[0], -v1[0]], [v[0], -v1[1]] ] )
+                b = np.array( [p1[0]-xr[0], p1[1]-yr[0] ] )
+                ts = np.linalg.solve( A, b )
+                # Calculamos las coordenadas de intersección
+                xi = xr + ts[0]*u
+                yi = yr + ts[0]*v
+            v2 = p4-p3    
+            # Obtenemos la ecuación paramétrica para la recta entre los
+            if abs(np.sum(v2)) > 2: # Para evitar que la matriz sea singular
+                # Calculamos el valor de t y s de intersección con la recta
+                # de ajuste dada por OpenCV resolviendo el sistema de
+                # ecuaciones lineales
+                A = np.array( [ [u[0], -v2[0]], [v[0], -v2[1]] ] )
+                b = np.array( [ p3[0]-xr[0], p3[1]-yr[0] ] )
+                ts = np.linalg.solve( A, b )
+                
+                # Calculamos las coordenadas de intersección
+                xi2 = xr + ts[0]*u
+                yi2 = yr + ts[0]*v
+            # Graficamos el punto
+            #cv2.circle( imBGR, (xi2, yi2), 5, (128,0,128), 2 )
+    # Trazamos una recta entre los puntos de intersección
+            cv2.line( imBGR, (int(xi), int(yi)), (int(xi2), int(yi2)), (0,255,0), 2 )
+    
+    ### Traza líneas de dimensión
+            # El vector perpendicular es [-v,u], por lo que empezaremos
+            # a trazar una línea en los extremos siguiendo la dirección
+            # de ese vector
+            lon = 0.8*min(rect[1])/2 # Longitud de las lineas perpendiculares
+            l1x0 = int(xi - lon*v)
+            l1y0 = int(yi + lon*u)
+            l1x1 = int(xi + lon*v)
+            l1y1 = int(yi - lon*u)
+            cv2.line( imBGR, (l1x0, l1y0), ( l1x1, l1y1), (0,255,0), 2 )
+    # Línea de dimensión en el otro extremo
+            l2x0 = int(xi2 - lon*v)
+            l2y0 = int(yi2 + lon*u)
+            l2x1 = int(xi2 + lon*v)
+            l2y1 = int(yi2 - lon*u)
+            cv2.line( imBGR, (l2x0, l2y0), (l2x1, l2y1), (0,255,0), 2 )
+    # Ponemos el texto en un extremo
+            fuente = cv2.FONT_HERSHEY_SIMPLEX
+            dim = np.sqrt( (xi2-xi)**2 + (yi2-yi)**2 )
+            dim = dim*rel
+            texto = '%.2fmm' % dim # Número con dos cifras después del punto
+            if i == 0:
+                meds_avg = dim #Obtener el average de varios ciclos
+            cv2.putText(imBGR, texto, (l2x1, l2y1), fuente, 0.6, (0,255,0))
+            
+
+    #Calcular el promedio, minimo y maximo de la medida de 100 frames.
+    if 0 <= a <= 99 and meds_avg[0] != 0:
+        store_avg[a] = meds_avg[0]
+    elif a == 100:
+        print('Average: '+ str(np.average(store_avg)))
+        print('Max: ' + str(np.max(store_avg)))
+        print('Min: ' + str(np.min(store_avg)))
+    a = a + 1
+    #Muestra frame actual    
+    cv2.imshow('Imagen',imBGR)
+    k = cv2.waitKey(1) #espera 1ms
+    if k==27:
+        break
+    
+#Libera el objeto de captura
+cap.release()
+#Cierra todo
+cv2.destroyAllWindows()
